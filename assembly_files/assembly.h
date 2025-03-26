@@ -19,7 +19,7 @@
 #define NUM_PARTS 8
 
 // Période du tapis roulant. Il avance d'une position toutes les BELT_PERIOD ms
-#define BELT_PERIOD 1000 // ms
+#define BELT_PERIOD 2000 // ms
 
 // Délai minimum pour une installation par un bras robot
 #define MIN_DELAY 50
