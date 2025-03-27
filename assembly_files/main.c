@@ -7,116 +7,175 @@
 #include "assembly_library.h"
 #include "assembly_library.c"
 
-assembly_line_t line;
-atomic_int shutdown_flag = 0;
 pthread_t threads[7];
 
+assembly_line_t line;
+
+sem_t sem_signal;
+sem_t sem_arm;
+sem_t sem_restart;
+sem_t sem_watchdog;
+
+timer_t watchdog_timer;
+
+atomic_int shutdown_flag = 0;
+atomic_int watchdog_flag = 0;
+
+int PET_TIME = (int)(BELT_PERIOD*4);
+
 typedef struct {
+    int part;
     side_t side;
     int position;
 } arm_task_t;
 
-void* install_part(void* arg) {
-    arm_task_t* task = (arm_task_t*)arg;
+arm_task_t arm[7] = {
+    {PART_FRAME, LEFT, 1},
+    {PART_ENGINE,LEFT, 2},
+    {PART_WHEELS,RIGHT, 2},
+    {PART_BODY,LEFT, 3},
+    {PART_DOORS,RIGHT, 4},
+    {PART_LIGHTS,LEFT, 4},
+    {PART_WINDOWS,RIGHT, 5}
+};
 
-    struct timespec ts;
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+const char* part_to_string(int part) {
+    switch (part) {
+        case PART_FRAME: return "Frame";
+        case PART_ENGINE: return "Engine";
+        case PART_WHEELS: return "Wheels";
+        case PART_BODY: return "Body";
+        case PART_DOORS: return "Doors";
+        case PART_LIGHTS: return "Lights";
+        case PART_WINDOWS: return "Windows";
+        default: return "Unknown";
+    }
+}
+
+void* get_currenttime(struct timespec* ts) {
+    if (clock_gettime(CLOCK_REALTIME, ts) != 0) {
         perror("clock_gettime failed");
-        free(task);
-        return NULL;
     }
+}
 
-    sleep_until(&ts, (BELT_PERIOD * task->position + 50));
+void* arm_task_loop(void* arg) {
+    arm_task_t* task = (arm_task_t*)arg;
+    struct timespec ts; 
 
-    while (!shutdown_flag) { 
-        if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-            perror("clock_gettime failed");
-            return NULL;
+    while(!shutdown_flag){
+        if(watchdog_flag) { 
+            sem_post(&sem_watchdog); 
+            printf_green("Arm for %s ready\n", part_to_string(task->part));
+        } // tell the watchdog that the arm is ready
+        sem_wait(&sem_arm); // wait to start
+
+        get_currenttime(&ts);
+        sleep_until(&ts, (BELT_PERIOD * task->position + 10));
+
+        while(!shutdown_flag && !watchdog_flag){
+            get_currenttime(&ts);
+            trigger_arm(line, task->side, task->position); // install the part
+            pet_watchdog(watchdog_timer, PET_TIME); // pet the watchdog
+            sleep_until(&ts, BELT_PERIOD*(line->belt.check_position + 1)); // wait for the right time
         }
-
-        error_t error = trigger_arm(line, task->side, task->position);
-
-        sleep_until(&ts, BELT_PERIOD*(MAX_POSITION-2));
     }
 
-    printf("Thread for position %d | side %d exiting.\n", task->position, task->side);
+    printf_red("Arm for %s shutdown\n", part_to_string(task->part));
     free(task);
     return NULL;
 }
 
-void start_installation_threads() {
-    arm_task_t tasks[7] = {
-        {LEFT, 1},
-        {LEFT, 2},
-        {RIGHT, 2},
-        {LEFT, 3},
-        {RIGHT, 4},
-        {LEFT, 4},
-        {RIGHT, 5}
-    };
-
+void setup_arms(){
     for (int i = 0; i < 7; i++) {
-        arm_task_t* task = malloc(sizeof(arm_task_t));
-        *task = tasks[i];
-        pthread_create(&threads[i], NULL, install_part, task);
-        printf("thread %d created\n", i);
+        setup_arm(line, arm[i].part, arm[i].side, arm[i].position);
     }
 }
 
-sem_t sem;
+void create_arm_task(){
+    for (int i = 0; i < 7; i++) {
+        arm_task_t* task = malloc(sizeof(arm_task_t));
+        *task = arm[i];
+        pthread_create(&threads[i], NULL, arm_task_loop, task);
+    }
+}
 
 void* handle_show_stats(void* arg) {
     while(!shutdown_flag){
-        sem_wait(&sem);
+        sem_wait(&sem_signal);
         print_assembly_stats(line);
     }
     return NULL;
 }
 
 void handler(int signum) {
-    if(signum == SIGUSR1) {
-        sem_post(&sem);
+    if(signum == SIGUSR1) { // new terminal "ps aux | grep nom_du_programme" -> kill -SIGUSR1 <pid>
+        sem_post(&sem_signal);
     }
     else if (signum == SIGINT) { // CTRL+C
         printf("Signal %d received. Shutting down...\n", signum);
+        shutdown_assembly(line); // shutdown the assembly line
         shutdown_flag = 1;
-    
-        // attends que les threads se termine
-        for (int i = 0; i < 7; i++) {
-            pthread_join(threads[i], NULL);
-        }
-    
-        shutdown_assembly(line); 
-        free_assembly_line(&line);
         printf("Signal %d handled. Resources released.\n", signum);
     }
 }
 
+void start(){
+    for (int i = 0; i < 7; i++) { sem_post(&sem_arm); } // Launch the arms
+    run_assembly(line); // run the assembly line
+}
+
+void watchdog_handler(union sigval arg) {
+    if(!watchdog_flag && !shutdown_flag){
+        printf_red("Watchdog !\n");
+        watchdog_flag = 1;  
+        line->stats.failed_cars++;
+        shutdown_assembly(line); // shutdown the assembly line
+    }
+}
+
+// MAIN
+
 int main(){
-    // setup
+    //setup
     init_assembly_line(&line);
-    setup_arm(line, PART_FRAME, LEFT, 1);
-    setup_arm(line, PART_ENGINE, LEFT, 2);
-    setup_arm(line, PART_WHEELS, RIGHT, 2);
-    setup_arm(line, PART_BODY, LEFT, 3);
-    setup_arm(line, PART_DOORS, RIGHT, 4);
-    setup_arm(line, PART_LIGHTS, LEFT, 4);
-    setup_arm(line, PART_WINDOWS, RIGHT, 5);
+    setup_arms();
+    printf("Setup done\n");
 
-    // setup signal
-    sem_init(&sem, 0, 0);
+    // setup semaphores
+    sem_init(&sem_arm, 0, 0); // setup waiting semaphore for arms
+    sem_init(&sem_signal, 0, 0); // setup semaphore for signal
+    sem_init(&sem_watchdog, 0, 0); // setup semaphore for watchdog
 
+    // setup signal handler
     pthread_t thread;
     pthread_create(&thread, NULL, handle_show_stats, NULL);
     handle_signal(SIGUSR1, handler);
     handle_signal(SIGINT, handler);
 
-    // launch thread
-    start_installation_threads();
+    // setup watchdog
+    watchdog_timer = watchdog_function(watchdog_handler); 
 
-    // run
-    run_assembly(line);
+    create_arm_task();
 
-    pthread_join(thread, NULL);
+    while(!shutdown_flag){
+        if(watchdog_flag) {
+            printf_green("Wait for all arms to be ready\n");
+            for(int i = 0; i < 7; i++){ sem_wait(&sem_watchdog); } // wait for all arms to be ready
+            watchdog_flag = 0;
+            printf_green("Restarting...\n");
+        }    
+
+        pet_watchdog(watchdog_timer, PET_TIME); // pet the watchdog
+
+        start();
+    }
+
+    for(int i = 0; i < 7; i++){ // wait all arm shutdown
+        pthread_join(threads[i], NULL);
+    }
+
+    print_assembly_stats(line);
+    free_assembly_line(&line);
+
     return 0;
 }
