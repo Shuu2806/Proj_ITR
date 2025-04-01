@@ -10,3 +10,6 @@ void handle_signal(int signum, void (*handler)(int));
 timer_t watchdog();
 timer_t watchdog_function (void (*fonction) (union sigval));
 void pet_watchdog(timer_t timer_id, int duration);
+
+// delay
+void delay_until(struct timespec *start,long long unsigned int delay);

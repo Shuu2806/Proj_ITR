@@ -43,3 +43,34 @@ timer_t watchdog_function(void (*fonction) (union sigval)) {
     timer_create (CLOCK_REALTIME, &se, &timer_id) ;
     return timer_id;
 }
+
+// delay 
+#ifdef MACOS_SLEEP
+void delay_until(struct timespec *ts, unsigned long long int delay) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    unsigned long long int elapsed = (now.tv_sec - ts->tv_sec) * 1000000000 + (now.tv_nsec - ts->tv_nsec);
+    elapsed /= 1000000;
+    if (elapsed >= delay) return;
+    delay -= elapsed;
+    struct timespec new_ts;
+    struct timespec remaining;
+    new_ts.tv_sec = delay / 1000;
+    new_ts.tv_nsec = (delay % 1000)*1000000;
+    // print new_ts
+    while (nanosleep(&new_ts, &remaining) != 0) {
+        new_ts.tv_sec = remaining.tv_sec;
+        new_ts.tv_nsec = remaining.tv_nsec;
+    }
+}
+#else
+void delay_until(struct timespec *ts, unsigned long long int delay) {
+    struct timespec new_ts;
+    unsigned long long int time = ts->tv_nsec + delay * 1000000;
+    new_ts.tv_sec = ts->tv_sec + time / 1000000000;
+    new_ts.tv_nsec = time % 1000000000;
+    while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &new_ts, NULL) == EINTR) {
+    }
+}
+
+#endif

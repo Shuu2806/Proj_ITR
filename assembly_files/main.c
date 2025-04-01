@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
 
 #include "assembly.h"
-#include "assembly.c"
 #include "assembly_library.h"
-#include "assembly_library.c"
 
 pthread_t threads[7];
 
@@ -69,14 +70,16 @@ void* arm_task_loop(void* arg) {
         } // tell the watchdog that the arm is ready
         sem_wait(&sem_arm); // wait to start
 
+        if(shutdown_flag) break; // check if shutdown is requested
+
         get_currenttime(&ts);
-        sleep_until(&ts, (BELT_PERIOD * task->position + 10));
+        delay_until(&ts, (BELT_PERIOD * task->position + 10));
 
         while(!shutdown_flag && !watchdog_flag){
             get_currenttime(&ts);
             trigger_arm(line, task->side, task->position); // install the part
             pet_watchdog(watchdog_timer, PET_TIME); // pet the watchdog
-            sleep_until(&ts, BELT_PERIOD*(line->belt.check_position + 1)); // wait for the right time
+            delay_until(&ts, BELT_PERIOD*7); // wait for the right time
         }
     }
 
@@ -113,9 +116,12 @@ void handler(int signum) {
     }
     else if (signum == SIGINT) { // CTRL+C
         printf("Signal %d received. Shutting down...\n", signum);
-        shutdown_assembly(line); // shutdown the assembly line
         shutdown_flag = 1;
-        printf("Signal %d handled. Resources released.\n", signum);
+        shutdown_assembly(line); // shutdown the assembly line
+        if(watchdog_flag) {
+            for (int i = 0; i < 7; i++) { sem_post(&sem_arm); }
+            for(int i = 0; i < 7; i++) { sem_post(&sem_watchdog); }
+        }
     }
 }
 
@@ -128,7 +134,6 @@ void watchdog_handler(union sigval arg) {
     if(!watchdog_flag && !shutdown_flag){
         printf_red("Watchdog !\n");
         watchdog_flag = 1;  
-        line->stats.failed_cars++;
         shutdown_assembly(line); // shutdown the assembly line
     }
 }
@@ -163,13 +168,16 @@ int main(){
             for(int i = 0; i < 7; i++){ sem_wait(&sem_watchdog); } // wait for all arms to be ready
             watchdog_flag = 0;
             printf_green("Restarting...\n");
-        }    
+        }
+
+        if(shutdown_flag) break; // check if shutdown is requested
 
         pet_watchdog(watchdog_timer, PET_TIME); // pet the watchdog
 
         start();
     }
 
+    printf("TEST\n");
     for(int i = 0; i < 7; i++){ // wait all arm shutdown
         pthread_join(threads[i], NULL);
     }
