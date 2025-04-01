@@ -177,7 +177,6 @@ int main(){
         start();
     }
 
-    printf("TEST\n");
     for(int i = 0; i < 7; i++){ // wait all arm shutdown
         pthread_join(threads[i], NULL);
     }
