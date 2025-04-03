@@ -12,4 +12,5 @@ timer_t watchdog_function (void (*fonction) (union sigval));
 void pet_watchdog(timer_t timer_id, int duration);
 
 // delay
-void delay_until(struct timespec *start,long long unsigned int delay);
+void add_to_time(struct timespec *t, unsigned long long int delay, const struct timespec *start);
+void delay_until(const struct timespec *start, unsigned long long int delay);

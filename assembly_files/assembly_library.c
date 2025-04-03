@@ -45,32 +45,18 @@ timer_t watchdog_function(void (*fonction) (union sigval)) {
 }
 
 // delay 
-#ifdef MACOS_SLEEP
-void delay_until(struct timespec *ts, unsigned long long int delay) {
-    struct timespec now;
-    clock_gettime(CLOCK_REALTIME, &now);
-    unsigned long long int elapsed = (now.tv_sec - ts->tv_sec) * 1000000000 + (now.tv_nsec - ts->tv_nsec);
-    elapsed /= 1000000;
-    if (elapsed >= delay) return;
-    delay -= elapsed;
-    struct timespec new_ts;
-    struct timespec remaining;
-    new_ts.tv_sec = delay / 1000;
-    new_ts.tv_nsec = (delay % 1000)*1000000;
-    // print new_ts
-    while (nanosleep(&new_ts, &remaining) != 0) {
-        new_ts.tv_sec = remaining.tv_sec;
-        new_ts.tv_nsec = remaining.tv_nsec;
+void add_to_time(struct timespec *t, unsigned long long int delay, const struct timespec *start) {
+    if (start != NULL) {
+        t->tv_sec = start->tv_sec;
+        t->tv_nsec = start->tv_nsec;
     }
-}
-#else
-void delay_until(struct timespec *ts, unsigned long long int delay) {
-    struct timespec new_ts;
-    unsigned long long int time = ts->tv_nsec + delay * 1000000;
-    new_ts.tv_sec = ts->tv_sec + time / 1000000000;
-    new_ts.tv_nsec = time % 1000000000;
-    while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &new_ts, NULL) == EINTR) {
-    }
+    unsigned long int nsec = t->tv_nsec + delay * 1000000;
+    t->tv_nsec = nsec % 1000000000;
+    t->tv_sec = t->tv_sec + nsec / 1000000000;
 }
 
-#endif
+void delay_until(const struct timespec *start, unsigned long long int delay) {
+    struct timespec end;
+    add_to_time(&end, delay, start);
+    while (clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &end, NULL) == EINTR) {}
+}
