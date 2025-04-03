@@ -53,12 +53,6 @@ const char* part_to_string(int part) {
     }
 }
 
-void* get_currenttime(struct timespec* ts) {
-    if (clock_gettime(CLOCK_REALTIME, ts) != 0) {
-        perror("clock_gettime failed");
-    }
-}
-
 void* arm_task_loop(void* arg) {
     arm_task_t* task = (arm_task_t*)arg;
     struct timespec ts; 
@@ -72,11 +66,11 @@ void* arm_task_loop(void* arg) {
 
         if(shutdown_flag) break; // check if shutdown is requested
 
-        get_currenttime(&ts);
+        clock_gettime(CLOCK_REALTIME, &ts);
         delay_until(&ts, (BELT_PERIOD * task->position + 10));
 
-        while(!shutdown_flag && !watchdog_flag){
-            get_currenttime(&ts);
+        while(!shutdown_flag && !watchdog_flag) {
+            clock_gettime(CLOCK_REALTIME, &ts);
             trigger_arm(line, task->side, task->position); // install the part
             pet_watchdog(watchdog_timer, PET_TIME); // pet the watchdog
             delay_until(&ts, BELT_PERIOD*7); // wait for the right time
